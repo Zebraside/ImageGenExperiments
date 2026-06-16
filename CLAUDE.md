@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Do **not** add a `Co-Authored-By:` trailer or otherwise credit Claude/the assistant as a co-author.
 - Write each commit message as a short bullet list summarizing what was done.
+- When starting new work, create a new branch and work in it (don't commit directly to `main`).
+- When merging a branch into `main`, squash its commits before merging.
 
 ## Commands
 
