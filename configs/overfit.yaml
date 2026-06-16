@@ -1,0 +1,48 @@
+# Overfit-one-batch config for pipeline sanity checks.
+# Trains LoRA on a single repeated batch to verify the training loop is correct.
+# Requires the base model to be cached (run RUN_DOWNLOAD_TESTS=1 uv run pytest first,
+# or let imagegen.train download it on the fly).
+#
+# Usage:
+#   uv run python -m imagegen.train --config configs/overfit.yaml
+
+seed: 42
+
+model:
+  key: sd21
+  base_model: Manojb/stable-diffusion-2-1-base
+  image_size: 256
+
+lora:
+  rank: 16
+  alpha: 16
+  dropout: 0.0
+  target_modules: [to_q, to_k, to_v, to_out.0]
+
+data:
+  root: data/ffhq256
+  batch_size: 4
+  num_workers: 12
+  limit: 4
+
+train:
+  mode: lora
+  grad_checkpointing: false
+  lr: 1.0e-3                                     # higher than normal for faster convergence
+  max_steps: 200
+  max_epochs: null
+  overfit_batches: 1                             # Lightning Trainer arg: lock to one batch
+  trigger_prompt: "a high-quality photo of a person's face"
+  mixed_precision: bf16
+  gradient_clip_val: 1.0
+  output_dir: outputs/overfit_test
+  ckpt_every_n_steps: 99999                      # effectively disabled
+  sample_every_n_steps: 99999                    # step-based sampling disabled; use epochs instead
+  sample_every_n_epochs: 10                       # log generated images every 10 epochs
+  num_samples: 1
+  sample_steps: 20
+  guidance_scale: 7.5
+
+logging:
+  wandb_project: null                            # CSV logger only
+  log_every: 1                                   # 1 batch per epoch; must be ≤ 1 to see any logs

@@ -1,0 +1,27 @@
+# Example training configuration. Load with OmegaConf:
+#   from omegaconf import OmegaConf
+#   cfg = OmegaConf.load("configs/default.yaml")
+
+seed: 42
+device: cuda
+
+model:
+  name: unet
+  image_size: 256
+  in_channels: 3
+  base_channels: 128
+
+data:
+  root: data/
+  batch_size: 16
+  num_workers: 4
+
+train:
+  lr: 1.0e-4
+  epochs: 100
+  mixed_precision: bf16
+  output_dir: outputs/
+
+logging:
+  wandb_project: imagegen
+  log_every: 50

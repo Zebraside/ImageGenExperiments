@@ -1,0 +1,43 @@
+# Full fine-tuning of Stable Diffusion 2.1 base at 256x256 (the whole UNet is trained).
+# Heavier than LoRA: expect ~24 GB VRAM with grad checkpointing + small batch.
+#
+#   uv run python -m imagegen.train --config configs/full_sd21.yaml
+
+seed: 42
+
+model:
+  key: sd21
+  base_model: Manojb/stable-diffusion-2-1-base   # mirror of stabilityai/stable-diffusion-2-1-base (orig repo is private/deprecated)
+  image_size: 256
+
+lora:                                            # ignored when train.mode == full
+  rank: 16
+  alpha: 16
+  dropout: 0.0
+  target_modules: [to_q, to_k, to_v, to_out.0]
+
+data:
+  root: data/ffhq256                             # produced by scripts/prepare_dataset.py
+  batch_size: 1
+  num_workers: 4
+  limit: null
+
+train:
+  mode: full
+  grad_checkpointing: true
+  lr: 1.0e-5
+  max_steps: 5000
+  max_epochs: null
+  trigger_prompt: "a high-quality photo of a person's face"  # fallback when an image has no sidecar .txt caption (see scripts/caption_dataset.py)
+  mixed_precision: bf16
+  gradient_clip_val: 1.0
+  output_dir: outputs/full_sd21
+  ckpt_every_n_steps: 1000
+  sample_every_n_steps: 500
+  num_samples: 4
+  sample_steps: 25
+  guidance_scale: 7.5
+
+logging:
+  wandb_project: imagegen
+  log_every: 50
