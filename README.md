@@ -25,7 +25,7 @@ line confirming a GPU matmul succeeded.
 ## Prepare the dataset
 
 ```bash
-uv run scripts/prepare_dataset.py    # download FFHQ-256 + extract PNGs -> data/ffhq256/
+uv run scripts/prepare_dataset.py    # download FFHQ-256 + extract PNGs -> /workspace/data/ffhq256/
 uv run scripts/caption_dataset.py    # BLIP-caption every image -> sidecar <image>.txt
 uv run scripts/normalize_captions.py # rewrite captions into one clean form (in place)
 ```

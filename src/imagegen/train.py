@@ -73,7 +73,9 @@ def main() -> None:
         ModelCheckpoint(
             dirpath=cfg.train.output_dir,
             every_n_train_steps=cfg.train.ckpt_every_n_steps,
-            save_top_k=-1,
+            monitor="train/loss",  # only metric logged (lit_module); no validation set
+            mode="min",
+            save_top_k=1,
         ),
         SampleImageCallback(
             prompt=cfg.train.trigger_prompt,

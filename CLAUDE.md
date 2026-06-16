@@ -38,10 +38,10 @@ Any config leaf is overridable via OmegaConf dotlist args appended to the comman
 
 ## Dataset preparation
 
-Three idempotent scripts build `data/ffhq256/` (re-runs skip completed work):
+Three idempotent scripts build `/workspace/data/ffhq256/` (re-runs skip completed work):
 
 ```bash
-uv run scripts/prepare_dataset.py     # download FFHQ-256 parquet, extract PNGs -> data/ffhq256/
+uv run scripts/prepare_dataset.py     # download FFHQ-256 parquet, extract PNGs -> /workspace/data/ffhq256/
 uv run scripts/caption_dataset.py     # BLIP-caption each image -> sidecar <image>.txt
 uv run scripts/normalize_captions.py  # rewrite captions in place via Qwen2.5-1.5B-Instruct
 ```

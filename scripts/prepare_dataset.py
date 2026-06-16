@@ -28,8 +28,8 @@ import pyarrow.parquet as pq
 from huggingface_hub import snapshot_download
 
 REPO_ID = "merkol/ffhq-256"
-PARQUET_ROOT = Path("data/ffhq256_parquet")
-DST_ROOT = Path("data/ffhq256")
+PARQUET_ROOT = Path("/workspace/data/ffhq256_parquet")
+DST_ROOT = Path("/workspace/data/ffhq256")
 
 
 def download() -> None:

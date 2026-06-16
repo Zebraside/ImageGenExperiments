@@ -18,7 +18,7 @@ lora:                                            # used only when train.mode == 
   target_modules: [to_q, to_k, to_v, to_out.0]
 
 data:
-  root: data/ffhq256                             # produced by scripts/prepare_dataset.py
+  root: /workspace/data/ffhq256                  # produced by scripts/prepare_dataset.py
   batch_size: 16                                 # lower (e.g. 4) for full fine-tune
   num_workers: 4
   limit: null                                    # cap #images (smoke tests / overfit)
@@ -32,7 +32,7 @@ train:
   trigger_prompt: "a woman with dark hair"  # fallback when an image has no sidecar .txt caption (see scripts/caption_dataset.py)
   mixed_precision: bf16                          # bf16 | fp16 | fp32
   gradient_clip_val: 1.0
-  output_dir: outputs/lora_sd21
+  output_dir: /workspace/outputs/lora_sd21
   ckpt_every_n_steps: 500
   sample_every_n_steps: 250
   num_samples: 4

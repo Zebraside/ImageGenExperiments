@@ -20,7 +20,7 @@ lora:
   target_modules: [to_q, to_k, to_v, to_out.0]
 
 data:
-  root: data/ffhq256
+  root: /workspace/data/ffhq256
   batch_size: 4
   num_workers: 12
   limit: 4
@@ -35,7 +35,7 @@ train:
   trigger_prompt: "a high-quality photo of a person's face"
   mixed_precision: bf16
   gradient_clip_val: 1.0
-  output_dir: outputs/overfit_test
+  output_dir: /workspace/outputs/overfit_test
   ckpt_every_n_steps: 99999                      # effectively disabled
   sample_every_n_steps: 99999                    # step-based sampling disabled; use epochs instead
   sample_every_n_epochs: 10                       # log generated images every 10 epochs
