@@ -26,7 +26,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from imagegen.captions import build_messages, clean_caption
 from imagegen.data.dataset import IMAGE_EXTS
 
-DEFAULT_ROOT = Path("/workspace/data/ffhq256")
+DEFAULT_ROOT = Path("/workspace/data/ffhq512")
 DEFAULT_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
 DEFAULT_STATE = Path("/workspace/outputs/normalize_state.txt")
 

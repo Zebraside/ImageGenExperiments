@@ -7,7 +7,7 @@ device: cuda
 
 model:
   name: unet
-  image_size: 256
+  image_size: 512
   in_channels: 3
   base_channels: 128
 

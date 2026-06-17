@@ -13,7 +13,7 @@ import warnings
 
 import lightning as L
 import torch
-from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger, WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
@@ -77,6 +77,7 @@ def main() -> None:
             mode="min",
             save_top_k=1,
         ),
+        LearningRateMonitor(logging_interval="step"),
         SampleImageCallback(
             prompt=cfg.train.trigger_prompt,
             output_dir=cfg.train.output_dir,

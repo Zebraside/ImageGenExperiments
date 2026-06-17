@@ -1,4 +1,4 @@
-# LoRA fine-tuning of Stable Diffusion 2.1 base at 256x256.
+# LoRA fine-tuning of Stable Diffusion 2.1 base at 512x512 (its native resolution).
 # Load + override from the CLI, e.g.:
 #   uv run python -m imagegen.train --config configs/lora_sd21.yaml train.max_steps=2
 #
@@ -9,7 +9,7 @@ seed: 42
 model:
   key: sd21                                      # registry key (see imagegen.models.factory)
   base_model: Manojb/stable-diffusion-2-1-base   # mirror of stabilityai/stable-diffusion-2-1-base (orig repo is private/deprecated)
-  image_size: 256
+  image_size: 512
 
 lora:                                            # used only when train.mode == lora
   rank: 32
@@ -18,8 +18,8 @@ lora:                                            # used only when train.mode == 
   target_modules: [to_q, to_k, to_v, to_out.0]
 
 data:
-  root: /workspace/data/ffhq256                  # produced by scripts/prepare_dataset.py
-  batch_size: 16                                 # lower (e.g. 4) for full fine-tune
+  root: /workspace/data/ffhq512                  # produced by scripts/prepare_dataset.py
+  batch_size: 8                                  # 512 forward/backward is ~4x the 256 area; lower further if OOM
   num_workers: 4
   limit: null                                    # cap #images (smoke tests / overfit)
 
@@ -27,7 +27,7 @@ train:
   mode: lora                                     # lora | full
   optimizer: adamw                               # adamw | adamw_8bit (8-bit needs bitsandbytes; mainly for full FT)
   accumulate_grad_batches: 1                     # effective batch = batch_size * this
-  grad_checkpointing: false                      # set true for full FT on 24 GB cards
+  grad_checkpointing: true                       # 512 LoRA still runs full-UNet activations; needed to fit 16 GB
   lr: 1.0e-4                                      # use ~1e-5 for full fine-tune
   max_steps: 2000
   max_epochs: null                               # set one of max_steps / max_epochs

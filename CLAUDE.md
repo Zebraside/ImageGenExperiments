@@ -25,7 +25,7 @@ uv add <package>                     # add a dependency
 Training:
 
 ```bash
-uv run python -m imagegen.train --config configs/lora_sd21.yaml      # LoRA fine-tune SD 2.1 @ 256
+uv run python -m imagegen.train --config configs/lora_sd21.yaml      # LoRA fine-tune SD 2.1 @ 512
 uv run python -m imagegen.train --config configs/full_sd21.yaml      # full UNet fine-tune
 uv run imagegen-overfit                                              # single-batch sanity check (configs/overfit.yaml)
 uv run python -m imagegen.train --config configs/lora_sd21.yaml train.max_steps=2 data.limit=8 logging.wandb_project=null  # quick smoke run
@@ -38,15 +38,15 @@ Any config leaf is overridable via OmegaConf dotlist args appended to the comman
 
 ## Dataset preparation
 
-Three idempotent scripts build `/workspace/data/ffhq256/` (re-runs skip completed work):
+Idempotent scripts build `/workspace/data/ffhq512/` (re-runs skip completed work):
 
 ```bash
-uv run scripts/prepare_dataset.py     # download FFHQ-256 parquet, extract PNGs -> /workspace/data/ffhq256/
-uv run scripts/caption_dataset.py     # BLIP-caption each image -> sidecar <image>.txt
-uv run scripts/normalize_captions.py  # rewrite captions in place via Qwen2.5-1.5B-Instruct
+uv run scripts/prepare_dataset.py     # download FFHQ-512 parquet (Ryan-sjtu/ffhq512-caption), extract PNGs + caption sidecars -> /workspace/data/ffhq512/
+uv run scripts/caption_dataset.py     # (optional) re-caption each image with BLIP -> sidecar <image>.txt
+uv run scripts/normalize_captions.py  # (optional) rewrite captions in place via Qwen2.5-1.5B-Instruct
 ```
 
-Training reads each image's caption from its sidecar `.txt`; images without one fall back to `train.trigger_prompt`.
+`prepare_dataset.py` writes each image's caption (from the dataset's `text` column) to a sidecar `.txt`, so the dataset arrives captioned — the BLIP/Qwen scripts are only needed to regenerate captions. Training reads each image's caption from its sidecar `.txt`; images without one fall back to `train.trigger_prompt`.
 
 ## Architecture
 

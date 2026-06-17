@@ -1,8 +1,12 @@
-# Full fine-tuning of Stable Diffusion 2.1 base at 256x256 (the whole UNet is trained).
-# Heavier than LoRA, but fits 16 GB VRAM thanks to grad checkpointing + 8-bit AdamW +
-# bf16 frozen VAE/text encoder. Measured peak (RTX 2000 Ada, 16 GB):
-#   ~9 GB static, +~0.04 GB/image -> batch 16 ~9.5 GB, 32 ~10.1 GB, 48 ~11.8 GB, 64 OOMs.
-# batch_size 16 leaves ample headroom for the periodic sample callback's inference pass.
+# Full fine-tuning of Stable Diffusion 2.1 base at 512x512 (the whole UNet is trained).
+# 512 is SD 2.1 base's native resolution. Heavier than LoRA, but targets 16 GB VRAM via
+# grad checkpointing + 8-bit AdamW + bf16 frozen VAE/text encoder. Versus 256, the latents
+# are 4x the spatial area (64x64 vs 32x32), so activation memory roughly quadruples and the
+# old 256 batch (16) OOMs. batch_size 4 x accumulate_grad_batches 8 keeps the effective batch
+# at 32. The run's VRAM peak at 512 is the periodic sample pass, not training -- it is
+# generated one image at a time (see lit_module.generate) so num_samples doesn't blow it up.
+# Measured peak ~15.6/16 GB on an RTX 2000 Ada (tight); trade batch_size against
+# accumulate_grad_batches (hold their product ~= 32) if you need to adjust.
 # Effective batch = data.batch_size * train.accumulate_grad_batches.
 #
 #   uv run python -m imagegen.train --config configs/full_sd21.yaml
@@ -12,7 +16,7 @@ seed: 42
 model:
   key: sd21
   base_model: Manojb/stable-diffusion-2-1-base   # mirror of stabilityai/stable-diffusion-2-1-base (orig repo is private/deprecated)
-  image_size: 256
+  image_size: 512
 
 lora:                                            # ignored when train.mode == full
   rank: 16
@@ -21,28 +25,33 @@ lora:                                            # ignored when train.mode == fu
   target_modules: [to_q, to_k, to_v, to_out.0]
 
 data:
-  root: /workspace/data/ffhq256                  # produced by scripts/prepare_dataset.py
-  batch_size: 16                                 # ~9.5 GB measured; up to ~48 fits if you want larger micro-batches
+  root: /workspace/data/ffhq512                  # produced by scripts/prepare_dataset.py
+  batch_size: 4                                  # 512 latents are 4x the 256 area; 4 fits 16 GB (peak is the sample pass)
   num_workers: 4
   limit: null
 
 train:
   mode: full
   optimizer: adamw_8bit                          # bitsandbytes 8-bit AdamW; cuts optimizer state ~6.9 GB -> ~1.7 GB
-  accumulate_grad_batches: 2                      # effective batch = batch_size * this (= 32)
+  accumulate_grad_batches: 8                      # effective batch = batch_size * this (= 32)
   grad_checkpointing: true
   lr: 1.0e-5
-  max_steps: 5000
+  lr_schedule: cosine                            # warmup then cosine decay; curbs late-step weight drift (vs. constant)
+  lr_warmup_steps: 200
+  ema: true                                      # EMA of UNet weights; sampled/saved from instead of raw weights (~3.4 GB extra VRAM)
+  ema_decay: 0.999
+  max_steps: 2500                                # quality peaked ~1-2 epochs (70k imgs / eff-batch 32 ~ 2187 steps/epoch)
   max_epochs: null
   trigger_prompt: "a high-quality photo of a person's face"  # fallback when an image has no sidecar .txt caption (see scripts/caption_dataset.py)
+  cond_dropout_prob: 0.1                          # fraction of captions dropped to the null prompt each step, so CFG has a trained unconditional
   mixed_precision: bf16
   gradient_clip_val: 1.0
   output_dir: /workspace/outputs/full_sd21
-  ckpt_every_n_steps: 1000
+  ckpt_every_n_steps: 500                         # all kept (save_top_k=-1); 2500/500 = 5 ckpts ~30 GB on disk
   sample_every_n_steps: 500
   num_samples: 4
-  sample_steps: 25
-  guidance_scale: 7.5
+  sample_steps: 50                                # more steps -> samples reflect weights, not sampler artifacts
+  guidance_scale: 4.0                             # lower guidance reduces small-feature (eye/gaze) artifacts
 
 logging:
   wandb_project: imagegen

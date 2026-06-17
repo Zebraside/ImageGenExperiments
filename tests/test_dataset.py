@@ -16,14 +16,14 @@ def _make_images(root, n=5, size=256):
 
 def test_returns_normalized_tensor_and_caption(tmp_path):
     _make_images(tmp_path, n=3)
-    ds = ImageFolderDataset(tmp_path, caption="a face", image_size=256)
+    ds = ImageFolderDataset(tmp_path, caption="a face", image_size=512)
 
     assert len(ds) == 4  # 3 png + 1 nested jpg
     sample = ds[0]
     assert sample["caption"] == "a face"
 
     px = sample["pixel_values"]
-    assert px.shape == (3, 256, 256)
+    assert px.shape == (3, 512, 512)
     assert px.dtype == torch.float32
     assert px.min() >= -1.0 and px.max() <= 1.0
 

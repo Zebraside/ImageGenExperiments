@@ -11,7 +11,7 @@ seed: 42
 model:
   key: sd21
   base_model: Manojb/stable-diffusion-2-1-base
-  image_size: 256
+  image_size: 512
 
 lora:
   rank: 16
@@ -20,7 +20,7 @@ lora:
   target_modules: [to_q, to_k, to_v, to_out.0]
 
 data:
-  root: /workspace/data/ffhq256
+  root: /workspace/data/ffhq512
   batch_size: 4
   num_workers: 12
   limit: 4

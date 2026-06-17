@@ -35,7 +35,7 @@ class ImageFolderDataset(Dataset):
         self,
         root: str | Path,
         caption: str,
-        image_size: int = 256,
+        image_size: int = 512,
         limit: int | None = None,
     ) -> None:
         self.root = Path(root)

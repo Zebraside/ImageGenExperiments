@@ -4,7 +4,7 @@ Each loader returns a :class:`ModelBundle` with the VAE and text encoder frozen.
 Depending on ``cfg.train.mode`` the denoiser is either wrapped with LoRA adapters
 (only the adapters stay trainable) or left fully trainable.
 
-Models we can train at 256x256 (see the plan for VRAM estimates):
+Models we can train at 512x512 (see the plan for VRAM estimates):
   - "sd21"      Manojb/stable-diffusion-2-1-base        (UNet, epsilon)   <- default
                 (mirror of the now-private stabilityai/stable-diffusion-2-1-base)
   - "sd15"      stable-diffusion-v1-5/stable-diffusion-v1-5 (UNet, epsilon)

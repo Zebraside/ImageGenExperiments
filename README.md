@@ -25,15 +25,18 @@ line confirming a GPU matmul succeeded.
 ## Prepare the dataset
 
 ```bash
-uv run scripts/prepare_dataset.py    # download FFHQ-256 + extract PNGs -> /workspace/data/ffhq256/
-uv run scripts/caption_dataset.py    # BLIP-caption every image -> sidecar <image>.txt
-uv run scripts/normalize_captions.py # rewrite captions into one clean form (in place)
+uv run scripts/prepare_dataset.py    # download FFHQ-512 + extract PNGs & caption sidecars -> /workspace/data/ffhq512/
+uv run scripts/caption_dataset.py    # (optional) re-caption every image with BLIP -> sidecar <image>.txt
+uv run scripts/normalize_captions.py # (optional) rewrite captions into one clean form (in place)
 ```
 
-Training reads each image's caption from its sidecar `.txt`; images without one fall back
-to `train.trigger_prompt` in the config. `normalize_captions.py` uses a small local LLM
-(`Qwen/Qwen2.5-1.5B-Instruct`) to standardize the raw BLIP captions. All three scripts are
-idempotent — re-runs skip work that's already done.
+`prepare_dataset.py` pulls native 512x512 FFHQ from `Ryan-sjtu/ffhq512-caption` and writes
+each row's caption to a sidecar `.txt`, so the dataset arrives captioned. The two caption
+scripts are only needed if you'd rather (re-)generate captions yourself: `caption_dataset.py`
+runs BLIP, and `normalize_captions.py` uses a small local LLM (`Qwen/Qwen2.5-1.5B-Instruct`)
+to standardize them. Training reads each image's caption from its sidecar `.txt`; images
+without one fall back to `train.trigger_prompt` in the config. All scripts are idempotent —
+re-runs skip work that's already done.
 
 ## Project layout
 

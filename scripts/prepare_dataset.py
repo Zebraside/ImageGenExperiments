@@ -1,16 +1,18 @@
-"""Download FFHQ (merkol/ffhq-256) and extract its 256x256 face images to disk.
+"""Download FFHQ (Ryan-sjtu/ffhq512-caption) and extract its 512x512 faces to disk.
 
 Run with:  uv run scripts/prepare_dataset.py
 
-merkol/ffhq-256 ships the full 70,000 FFHQ faces, already at 256x256, packed into
-~15 Parquet shards with embedded PNG bytes (~7.4 GB). Packed shards download as a
-handful of large files, so there's none of the per-file API-rate-limit pain of a
-loose-file repo.
+Ryan-sjtu/ffhq512-caption ships the full 70,000 FFHQ faces, already at 512x512,
+packed into Parquet shards with an embedded ``image`` column of PNG/JPEG bytes plus
+a ``text`` caption column (~27 GB). Packed shards download as a handful of large
+files, so there's none of the per-file API-rate-limit pain of a loose-file repo.
 
-Stage 1 downloads the Parquet shards into data/ffhq256_parquet/. Stage 2 decodes
-every row and writes it as data/ffhq256/<shard>/<row>.png (the layout the folder
-DataModule reads). Because the stored bytes are already 256x256 PNG, Stage 2 just
-writes them out verbatim -- no resize/re-encode.
+Stage 1 downloads the Parquet shards into data/ffhq512_parquet/. Stage 2 decodes
+every row and writes it as data/ffhq512/<shard>/<row>.png (the layout the folder
+DataModule reads). Because the stored bytes are already 512x512, Stage 2 just writes
+them out verbatim -- no resize/re-encode. It also writes the row's ``text`` caption
+to the sidecar data/ffhq512/<shard>/<row>.txt that ImageFolderDataset reads, so the
+dataset arrives captioned (no need to run caption_dataset.py / normalize_captions.py).
 
 Both stages are idempotent: re-runs skip already-downloaded shards and any output
 PNG that already exists. Exits non-zero if a row is missing image bytes.
@@ -27,9 +29,9 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from huggingface_hub import snapshot_download
 
-REPO_ID = "merkol/ffhq-256"
-PARQUET_ROOT = Path("/workspace/data/ffhq256_parquet")
-DST_ROOT = Path("/workspace/data/ffhq256")
+REPO_ID = "Ryan-sjtu/ffhq512-caption"
+PARQUET_ROOT = Path("/workspace/data/ffhq512_parquet")
+DST_ROOT = Path("/workspace/data/ffhq512")
 
 
 def download() -> None:
@@ -57,8 +59,10 @@ def extract() -> int:
         out_dir.mkdir(parents=True, exist_ok=True)
         pf = pq.ParquetFile(shard)
         row = 0
-        for batch in pf.iter_batches(batch_size=512, columns=["image"]):
-            for cell in batch.column("image").to_pylist():
+        for batch in pf.iter_batches(batch_size=512, columns=["image", "text"]):
+            images = batch.column("image").to_pylist()
+            texts = batch.column("text").to_pylist()
+            for cell, caption in zip(images, texts):
                 dst = out_dir / f"{row:06d}.png"
                 row += 1
                 if dst.exists():
@@ -68,7 +72,13 @@ def extract() -> int:
                 if not data:
                     errors.append(f"{shard.name} row {row - 1}: no image bytes")
                     continue
-                dst.write_bytes(data)  # already 256x256 PNG; no re-encode
+                dst.write_bytes(data)  # already 512x512; no re-encode
+                # Sidecar caption the dataset reader picks up; falls back to the trigger
+                # prompt if absent, so a missing/empty text is non-fatal.
+                if caption and caption.strip():
+                    dst.with_suffix(".txt").write_text(
+                        caption.strip() + "\n", encoding="utf-8"
+                    )
                 written += 1
         print(f"  shard {shard_idx:03d} ({shard.name}): {row} rows "
               f"(written={written} skipped={skipped})")

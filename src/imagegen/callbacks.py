@@ -37,11 +37,10 @@ class SampleImageCallback(L.Callback):
         self.guidance_scale = guidance_scale
         self.seed = seed
 
-    def _sample_and_log(self, trainer, pl_module, tag: str, log_step: int) -> None:
+    def _sample_and_log(self, trainer, pl_module, tag: str) -> None:
         """Generate from the trigger prompt, save to disk, and log to W&B if active.
 
-        ``tag`` prefixes the saved filenames (e.g. ``step000010`` or ``epoch0010``);
-        ``log_step`` is the (monotonic) step passed to W&B.
+        ``tag`` prefixes the saved filenames (e.g. ``step000010`` or ``epoch0010``).
         """
         images = pl_module.generate(
             prompt=self.prompt,
@@ -56,18 +55,20 @@ class SampleImageCallback(L.Callback):
             img.save(self.sample_dir / f"{tag}_{i}.png")
 
         if isinstance(trainer.logger, WandbLogger):
-            import wandb
-
-            trainer.logger.experiment.log(
-                {"samples": [wandb.Image(img, caption=self.prompt) for img in images]},
-                step=log_step,
+            # Use the logger's own log_image (logs at W&B's current step) rather than
+            # experiment.log(step=...): an explicit past step is rejected as
+            # non-monotonic once training metrics have advanced the step pointer.
+            trainer.logger.log_image(
+                key="samples",
+                images=list(images),
+                caption=[self.prompt] * len(images),
             )
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx) -> None:
         step = trainer.global_step
         if self.every_n_steps <= 0 or step == 0 or step % self.every_n_steps != 0:
             return
-        self._sample_and_log(trainer, pl_module, tag=f"step{step:06d}", log_step=step)
+        self._sample_and_log(trainer, pl_module, tag=f"step{step:06d}")
 
     def on_train_epoch_end(self, trainer, pl_module) -> None:
         if self.every_n_epochs <= 0:
@@ -77,6 +78,4 @@ class SampleImageCallback(L.Callback):
         epoch = trainer.current_epoch + 1
         if epoch % self.every_n_epochs != 0:
             return
-        self._sample_and_log(
-            trainer, pl_module, tag=f"epoch{epoch:04d}", log_step=trainer.global_step
-        )
+        self._sample_and_log(trainer, pl_module, tag=f"epoch{epoch:04d}")

@@ -8,7 +8,7 @@ from imagegen.models.factory import MODEL_REGISTRY, load_model
 
 def _cfg(**train):
     base = {
-        "model": {"key": "sd21", "base_model": "Manojb/stable-diffusion-2-1-base", "image_size": 256},
+        "model": {"key": "sd21", "base_model": "Manojb/stable-diffusion-2-1-base", "image_size": 512},
         "lora": {"rank": 8, "alpha": 8, "dropout": 0.0, "target_modules": ["to_q", "to_k", "to_v", "to_out.0"]},
         "train": {"mode": "lora", "grad_checkpointing": False, "lr": 1e-4},
     }

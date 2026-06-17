@@ -25,7 +25,7 @@ from transformers import BlipForConditionalGeneration, BlipProcessor
 
 from imagegen.data.dataset import IMAGE_EXTS
 
-DEFAULT_ROOT = Path("/workspace/data/ffhq256")
+DEFAULT_ROOT = Path("/workspace/data/ffhq512")
 DEFAULT_MODEL = "Salesforce/blip-image-captioning-large"
 
 
