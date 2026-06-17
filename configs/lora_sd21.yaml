@@ -25,6 +25,8 @@ data:
 
 train:
   mode: lora                                     # lora | full
+  optimizer: adamw                               # adamw | adamw_8bit (8-bit needs bitsandbytes; mainly for full FT)
+  accumulate_grad_batches: 1                     # effective batch = batch_size * this
   grad_checkpointing: false                      # set true for full FT on 24 GB cards
   lr: 1.0e-4                                      # use ~1e-5 for full fine-tune
   max_steps: 2000

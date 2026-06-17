@@ -27,6 +27,8 @@ data:
 
 train:
   mode: lora
+  optimizer: adamw                               # adamw | adamw_8bit
+  accumulate_grad_batches: 1
   grad_checkpointing: false
   lr: 1.0e-3                                     # higher than normal for faster convergence
   max_steps: 200

@@ -1,5 +1,9 @@
 # Full fine-tuning of Stable Diffusion 2.1 base at 256x256 (the whole UNet is trained).
-# Heavier than LoRA: expect ~24 GB VRAM with grad checkpointing + small batch.
+# Heavier than LoRA, but fits 16 GB VRAM thanks to grad checkpointing + 8-bit AdamW +
+# bf16 frozen VAE/text encoder. Measured peak (RTX 2000 Ada, 16 GB):
+#   ~9 GB static, +~0.04 GB/image -> batch 16 ~9.5 GB, 32 ~10.1 GB, 48 ~11.8 GB, 64 OOMs.
+# batch_size 16 leaves ample headroom for the periodic sample callback's inference pass.
+# Effective batch = data.batch_size * train.accumulate_grad_batches.
 #
 #   uv run python -m imagegen.train --config configs/full_sd21.yaml
 
@@ -18,12 +22,14 @@ lora:                                            # ignored when train.mode == fu
 
 data:
   root: /workspace/data/ffhq256                  # produced by scripts/prepare_dataset.py
-  batch_size: 1
+  batch_size: 16                                 # ~9.5 GB measured; up to ~48 fits if you want larger micro-batches
   num_workers: 4
   limit: null
 
 train:
   mode: full
+  optimizer: adamw_8bit                          # bitsandbytes 8-bit AdamW; cuts optimizer state ~6.9 GB -> ~1.7 GB
+  accumulate_grad_batches: 2                      # effective batch = batch_size * this (= 32)
   grad_checkpointing: true
   lr: 1.0e-5
   max_steps: 5000

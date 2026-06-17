@@ -95,6 +95,7 @@ def main() -> None:
         max_steps=cfg.train.get("max_steps") or -1,
         max_epochs=cfg.train.get("max_epochs"),
         overfit_batches=cfg.train.get("overfit_batches", 0),
+        accumulate_grad_batches=cfg.train.get("accumulate_grad_batches", 1),
         gradient_clip_val=cfg.train.gradient_clip_val,
         log_every_n_steps=cfg.logging.log_every,
         callbacks=callbacks,

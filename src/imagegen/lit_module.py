@@ -19,6 +19,7 @@ from omegaconf import DictConfig
 from peft.utils import get_peft_model_state_dict
 
 from imagegen.models.bundle import ModelBundle
+from imagegen.models.factory import FROZEN_DTYPE
 
 
 class LoRADiffusionModule(L.LightningModule):
@@ -78,7 +79,21 @@ class LoRADiffusionModule(L.LightningModule):
 
     def configure_optimizers(self):
         params = self.bundle.trainable_parameters()
-        return torch.optim.AdamW(params, lr=self.cfg.train.lr)
+        optimizer = self.cfg.train.get("optimizer", "adamw")
+        if optimizer == "adamw_8bit":
+            try:
+                import bitsandbytes as bnb
+            except ImportError as exc:  # pragma: no cover - depends on install
+                raise ImportError(
+                    "train.optimizer='adamw_8bit' requires bitsandbytes "
+                    "(`uv add bitsandbytes`)."
+                ) from exc
+            return bnb.optim.AdamW8bit(params, lr=self.cfg.train.lr)
+        if optimizer == "adamw":
+            return torch.optim.AdamW(params, lr=self.cfg.train.lr)
+        raise ValueError(
+            f"Unknown train.optimizer {optimizer!r} (expected 'adamw' or 'adamw_8bit')."
+        )
 
     # --- sampling / saving ------------------------------------------------
 
@@ -97,15 +112,25 @@ class LoRADiffusionModule(L.LightningModule):
         generator = (
             torch.Generator(device=self.device).manual_seed(seed) if seed is not None else None
         )
+        # The sampling callback runs outside the trainer's autocast region, but the
+        # frozen VAE/text encoder are in half precision while the UNet stays fp32.
+        # Autocast (not pipe.to(dtype=...), which would clobber the fp32 UNet weights)
+        # reconciles the mix so the pipeline runs without a dtype mismatch.
+        weight_dtype = FROZEN_DTYPE[self.cfg.train.mixed_precision]
         try:
-            images = pipe(
-                [prompt] * num_images,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
-                height=self.image_size,
-                width=self.image_size,
-                generator=generator,
-            ).images
+            with torch.autocast(
+                self.device.type,
+                dtype=weight_dtype,
+                enabled=weight_dtype != torch.float32,
+            ):
+                images = pipe(
+                    [prompt] * num_images,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                    height=self.image_size,
+                    width=self.image_size,
+                    generator=generator,
+                ).images
         finally:
             if was_training:
                 self.denoiser.train()

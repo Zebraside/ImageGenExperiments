@@ -15,12 +15,20 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import torch
 from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
 from omegaconf import DictConfig
 from peft import LoraConfig
 from transformers import CLIPTextModel, CLIPTokenizer
 
 from imagegen.models.bundle import ModelBundle
+
+# Dtype the frozen modules (VAE + text encoder) are cast to, keyed by
+# cfg.train.mixed_precision. They run only under no_grad, so storing them in
+# half precision saves memory with no effect on the trainable UNet (which stays
+# fp32 and is autocast by Lightning). fp16 is intentionally mapped to bf16 for
+# the VAE's sake (fp16 VAE can overflow to NaN); fp32 keeps everything as-is.
+FROZEN_DTYPE = {"bf16": torch.bfloat16, "fp16": torch.bfloat16, "fp32": torch.float32}
 
 
 def _load_sd(cfg: DictConfig) -> ModelBundle:
@@ -33,9 +41,11 @@ def _load_sd(cfg: DictConfig) -> ModelBundle:
     unet = UNet2DConditionModel.from_pretrained(base, subfolder="unet")
     noise_scheduler = DDPMScheduler.from_pretrained(base, subfolder="scheduler")
 
-    # VAE + text encoder are always frozen.
-    vae.requires_grad_(False)
-    text_encoder.requires_grad_(False)
+    # VAE + text encoder are always frozen, and cast to half precision: they
+    # only run under no_grad, so this trims weights + activations for free.
+    frozen_dtype = FROZEN_DTYPE[cfg.train.mixed_precision]
+    vae.requires_grad_(False).to(dtype=frozen_dtype)
+    text_encoder.requires_grad_(False).to(dtype=frozen_dtype)
 
     mode = cfg.train.mode
     if mode == "lora":

@@ -8,10 +8,11 @@ __pycache__/
 # uv / virtualenv
 .venv/
 
-# Data & model artifacts
-data/
-outputs/
-checkpoints/
+# Data & model artifacts (anchored to repo root so they don't shadow the
+# src/imagegen/data source package)
+/data/
+/outputs/
+/checkpoints/
 *.pt
 *.pth
 *.ckpt
