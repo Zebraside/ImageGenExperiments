@@ -2,8 +2,9 @@
 # 512 is SD 2.1 base's native resolution. Heavier than LoRA, but targets 16 GB VRAM via
 # grad checkpointing + 8-bit AdamW + bf16 frozen VAE/text encoder. Versus 256, the latents
 # are 4x the spatial area (64x64 vs 32x32), so activation memory roughly quadruples and the
-# old 256 batch (16) OOMs. Gradient accumulation is off, so the effective batch is just
-# data.batch_size (= 4); max_steps 17500 ~= one pass over the ~70k images (70000 / 4). The
+# old 256 batch (16) OOMs. Gradient accumulation gives an effective batch of 32
+# (data.batch_size 4 * accumulate_grad_batches 8) with no extra VRAM (the micro-batch stays
+# 4); max_steps 6500 ~= 3 passes over the ~70k images (69.5k train / 32 per step ~= 2170/epoch). The
 # run's VRAM peak at 512 is the periodic sample pass, not training -- it is generated one
 # image at a time (see lit_module.generate) so num_samples doesn't blow it up. Measured peak
 # ~15.6/16 GB on an RTX 2000 Ada (tight). To raise the effective batch, increase
@@ -35,15 +36,15 @@ data:
 train:
   mode: full
   optimizer: adamw_8bit                          # bitsandbytes 8-bit AdamW; cuts optimizer state ~6.9 GB -> ~1.7 GB
-  accumulate_grad_batches: 1
+  accumulate_grad_batches: 8                      # effective batch = data.batch_size * this = 32; no extra VRAM (micro-batch stays 4), only wall-clock
   grad_checkpointing: true
-  lr: 5.0e-6                                      # sqrt-scaled for the effective batch of 4 (was 1e-5 @ batch 32); lower lr curbs noisy-gradient drift over the longer 17.5k-step run
+  lr: 1.0e-5                                       # baseline for the effective batch of 32; a real batch supports a higher lr than the noisy batch-4 setting did
   lr_schedule: cosine                            # warmup then cosine decay; curbs late-step weight drift (vs. constant)
   lr_warmup_steps: 200
   ema: true                                      # EMA of UNet weights; sampled/saved from instead of raw weights (~3.4 GB extra VRAM)
-  ema_decay: 0.999                                # faster EMA suited to this ~1-epoch run (0.9999 barely warms up over 17.5k steps)
+  ema_decay: 0.9999                               # over the ~6.5k-step (3-epoch) run this has time to warm up and smooth the final weights
   snr_gamma: 5.0                                  # min-SNR-gamma loss weighting (null disables); balances per-timestep loss scales
-  max_steps: 17500
+  max_steps: 6500                                 # optimizer steps; ~3 epochs at effective batch 32 (see header)
   max_epochs: null
   trigger_prompt: "a high-quality photo of a person's face"  # fallback when an image has no sidecar .txt caption (see scripts/caption_dataset.py)
   cond_dropout_prob: 0.1                          # fraction of captions dropped to the null prompt each step, so CFG has a trained unconditional
@@ -51,7 +52,7 @@ train:
   gradient_clip_val: 1.0
   output_dir: /workspace/outputs/full_sd21
   ckpt_every_n_steps: 500                         # only used if val_size is null; with a val split, checkpointing follows the val cadence
-  val_check_interval: 500                         # run validation (and best-checkpoint selection) every N optimizer steps
+  val_check_interval: 4000                        # Lightning counts this in micro-batches, not optimizer steps: 4000 / accumulate_grad_batches(8) = every 500 optimizer steps
   val_seed: 0                                     # deterministic noise/timesteps for a comparable val/loss
   sample_every_n_steps: 500
   num_samples: 4
