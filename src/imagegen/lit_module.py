@@ -17,7 +17,7 @@ import torch
 import torch.nn.functional as F
 from diffusers import StableDiffusionPipeline
 from diffusers.optimization import get_cosine_schedule_with_warmup
-from diffusers.training_utils import EMAModel
+from diffusers.training_utils import EMAModel, compute_snr
 from diffusers.utils import convert_state_dict_to_diffusers
 from omegaconf import DictConfig
 from peft.utils import get_peft_model_state_dict
@@ -45,6 +45,15 @@ class LoRADiffusionModule(L.LightningModule):
         # during training so the UNet learns the unconditional score that inference-time
         # guidance extrapolates from (0.0 disables it).
         self.cond_dropout_prob = float(cfg.train.get("cond_dropout_prob", 0.0))
+
+        # min-SNR-gamma loss weighting (Hang et al. 2023): down-weights low-noise
+        # timesteps the model trivially fits, balancing the per-timestep loss scales.
+        # None keeps plain (unweighted) MSE.
+        snr_gamma = cfg.train.get("snr_gamma")
+        self.snr_gamma = float(snr_gamma) if snr_gamma is not None else None
+
+        # Seed offset for the deterministic validation pass (see validation_step).
+        self.val_seed = int(cfg.train.get("val_seed", 0))
 
         # Weight EMA (full fine-tuning only). Built in on_fit_start once the module
         # is on-device; sampled/saved from instead of the raw weights to curb the
@@ -125,19 +134,51 @@ class LoRADiffusionModule(L.LightningModule):
         keep = torch.rand(len(captions)) >= self.cond_dropout_prob
         return [c if keep[i] else "" for i, c in enumerate(captions)]
 
-    def training_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
+    def _loss_weights(self, timesteps: torch.Tensor) -> torch.Tensor | None:
+        """Per-sample min-SNR-gamma weights for ``timesteps``; ``None`` when disabled.
+
+        epsilon prediction: ``min(SNR, gamma) / SNR``; v-prediction adds the +1 term
+        (``min(SNR, gamma) / (SNR + 1)``) since the velocity target already folds in
+        the signal component.
+        """
+        if self.snr_gamma is None:
+            return None
+        snr = compute_snr(self.noise_scheduler, timesteps)
+        clamped = snr.clamp(max=self.snr_gamma)
+        if self.bundle.prediction_type == "v_prediction":
+            return clamped / (snr + 1)
+        return clamped / snr
+
+    def _diffusion_loss(
+        self,
+        batch: dict,
+        *,
+        generator: torch.Generator | None = None,
+        apply_dropout: bool = True,
+    ) -> torch.Tensor:
+        """Shared training/validation objective.
+
+        Passing a ``generator`` makes the noise + timestep draw (and the VAE sample)
+        deterministic, so the validation pass scores the same triples every time.
+        ``apply_dropout`` gates classifier-free-guidance caption dropout (training only;
+        validation measures the conditional loss).
+        """
         pixel_values = batch["pixel_values"]
+        captions = self._apply_cond_dropout(batch["caption"]) if apply_dropout else batch["caption"]
 
         with torch.no_grad():
-            latents = self.vae.encode(pixel_values).latent_dist.sample()
+            latents = self.vae.encode(pixel_values).latent_dist.sample(generator=generator)
             latents = latents * self.vae.config.scaling_factor
-            encoder_hidden_states = self._encode_text(self._apply_cond_dropout(batch["caption"]))
+            encoder_hidden_states = self._encode_text(captions)
 
-        noise = torch.randn_like(latents)
+        noise = torch.randn(
+            latents.shape, generator=generator, device=self.device, dtype=latents.dtype
+        )
         timesteps = torch.randint(
             0,
             self.noise_scheduler.config.num_train_timesteps,
             (latents.shape[0],),
+            generator=generator,
             device=self.device,
         ).long()
         noisy_latents = self.noise_scheduler.add_noise(latents, noise, timesteps)
@@ -148,9 +189,30 @@ class LoRADiffusionModule(L.LightningModule):
             target = noise
 
         model_pred = self.denoiser(noisy_latents, timesteps, encoder_hidden_states).sample
-        loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
+        weights = self._loss_weights(timesteps)
+        if weights is None:
+            return F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+        # Per-sample MSE, weighted by min-SNR, then averaged over the batch.
+        per_sample = F.mse_loss(model_pred.float(), target.float(), reduction="none").mean(
+            dim=list(range(1, model_pred.ndim))
+        )
+        return (per_sample * weights.to(per_sample.device)).mean()
+
+    def training_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
+        loss = self._diffusion_loss(batch)
         self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=False)
+        return loss
+
+    def validation_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
+        # Deterministic per-batch generator: the same (image, noise, timestep) triples
+        # are scored at every validation, so val/loss is comparable across steps and
+        # meaningful for checkpoint selection (unlike the noisy per-step train loss).
+        # Validation runs on the live weights; with a moderate ema_decay the EMA tracks
+        # them closely, so this is a faithful proxy for the saved (EMA) weights.
+        generator = torch.Generator(device=self.device).manual_seed(self.val_seed + batch_idx)
+        loss = self._diffusion_loss(batch, generator=generator, apply_dropout=False)
+        self.log("val/loss", loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         return loss
 
     def _build_optimizer(self) -> torch.optim.Optimizer:

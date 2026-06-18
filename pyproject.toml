@@ -42,4 +42,7 @@ torchvision = { index = "pytorch-cu124" }
 dev = [
     "pytest>=9.1.0",
     "ruff>=0.15.17",
+    "matplotlib>=3.9",
+    "polars>=1.0",
+    "ipykernel>=6.29",
 ]

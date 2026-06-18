@@ -13,7 +13,7 @@ import warnings
 
 import lightning as L
 import torch
-from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
+from lightning.pytorch.callbacks import LearningRateMonitor
 from lightning.pytorch.loggers import CSVLogger, WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
@@ -52,6 +52,9 @@ def main() -> None:
     cfg = parse_config()
     L.seed_everything(cfg.seed, workers=True)
 
+    val_size = cfg.data.get("val_size")
+    val_enabled = bool(val_size)
+
     datamodule = ImageFolderDataModule(
         root=cfg.data.root,
         caption=cfg.train.trigger_prompt,
@@ -59,6 +62,8 @@ def main() -> None:
         num_workers=cfg.data.num_workers,
         image_size=cfg.model.image_size,
         limit=cfg.data.get("limit"),
+        val_size=val_size,
+        seed=cfg.seed,
     )
 
     bundle = load_model(cfg)
@@ -69,14 +74,9 @@ def main() -> None:
     )
     module = LoRADiffusionModule(bundle, cfg)
 
+    # Mid-training .ckpt snapshots are disabled; only the final portable weights
+    # (save_weights below) are persisted.
     callbacks = [
-        ModelCheckpoint(
-            dirpath=cfg.train.output_dir,
-            every_n_train_steps=cfg.train.ckpt_every_n_steps,
-            monitor="train/loss",  # only metric logged (lit_module); no validation set
-            mode="min",
-            save_top_k=1,
-        ),
         LearningRateMonitor(logging_interval="step"),
         SampleImageCallback(
             prompt=cfg.train.trigger_prompt,
@@ -98,7 +98,16 @@ def main() -> None:
         overfit_batches=cfg.train.get("overfit_batches", 0),
         accumulate_grad_batches=cfg.train.get("accumulate_grad_batches", 1),
         gradient_clip_val=cfg.train.gradient_clip_val,
+        enable_checkpointing=False,
         log_every_n_steps=cfg.logging.log_every,
+        # Run validation on a step cadence (one "epoch" is the whole dataset here),
+        # else disable it entirely so the val_dataloader is never requested.
+        val_check_interval=cfg.train.get("val_check_interval") if val_enabled else None,
+        limit_val_batches=1.0 if val_enabled else 0,
+        # Run a validation pass before training (Lightning's sanity check) so the
+        # callback logs baseline validation images at step 0. self.log metrics are
+        # discarded during sanity, but the image hook still fires.
+        num_sanity_val_steps=cfg.train.get("num_sanity_val_steps", 2),
         callbacks=callbacks,
         logger=build_logger(cfg),
     )
