@@ -1,0 +1,59 @@
+# Experiment 4 -- Huber instead of L2: the exp1 full-FT baseline with the only
+# change being train.loss_type=huber (smooth-L1 on the noise target). Huber is
+# gentler on the high-error outliers that dominate MSE; this run isolates that
+# effect against exp1. Everything else (lr, EMA, snr_gamma, sampling) matches exp1.
+#   uv run python -m imagegen.train --config configs/exp4_full_huber.yaml
+
+seed: 42
+
+model:
+  key: sd21
+  base_model: Manojb/stable-diffusion-2-1-base
+  image_size: 512
+
+lora:
+  rank: 16
+  alpha: 16
+  dropout: 0.0
+  target_modules: [to_q, to_k, to_v, to_out.0]
+
+data:
+  root: /workspace/data/ffhq512
+  batch_size: 4
+  num_workers: 4
+  limit: null
+  val_size: 512
+
+train:
+  mode: full
+  optimizer: adamw_8bit
+  accumulate_grad_batches: 2                       # effective batch 8, matches exp3 (the L2 full-FT reference)
+  grad_checkpointing: true
+  lr: 2.0e-5
+  lr_schedule: cosine
+  lr_warmup_steps: 20
+  ema: true
+  ema_decay: 0.99
+  snr_gamma: 5.0
+  loss_type: huber                                # the one change vs exp3 (the full-FT L2 reference)
+  huber_delta: 1.0
+  max_steps: 2000                                   # fixed budget: 2000 optimizer steps (cosine horizon = full run)
+  max_epochs: null
+  num_sanity_val_steps: 0
+  trigger_prompt: "a high-quality photo of a person's face"
+  cond_dropout_prob: 0.1
+  mixed_precision: bf16
+  gradient_clip_val: 1.0
+  output_dir: /workspace/outputs/exp4_full_huber
+  ckpt_every_n_steps: 500
+  val_check_interval: 800                            # micro-batches; /accumulate(2) = every 400 optimizer steps
+  val_seed: 0
+  sample_every_n_steps: 200
+  num_samples: 4
+  sample_steps: 30
+  guidance_scale: 5.0
+
+logging:
+  wandb_project: imagegen
+  run_name: full-ft-huber-2k
+  log_every: 50

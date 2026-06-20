@@ -1,0 +1,64 @@
+# Full training run -- the FID winner scaled up. exp2_lora (LoRA r32, L2) was the
+# best of the 8-way loss-ablation sweep (FID 54.45, beating both full fine-tunes),
+# so this trains that exact recipe at full scale: ~3 epochs over FFHQ-512 with a
+# cosine LR decay, in-training FID monitoring, and periodic portable checkpoints.
+# Only the budget/schedule/monitoring differ from exp2_lora; the model recipe
+# (rank/alpha 32, batch 8, lr 1e-4, L2) is unchanged.
+#   # max_steps below is a placeholder; override with the computed 3-epoch value:
+#   #   N=$(find /workspace/data/ffhq512 -name '*.png' | wc -l); steps=3*ceil((N-512)/8)
+#   uv run python -m imagegen.train --config configs/full_lora_l2.yaml train.max_steps=<computed>
+
+seed: 42
+
+model:
+  key: sd21
+  base_model: Manojb/stable-diffusion-2-1-base
+  image_size: 512
+
+lora:
+  rank: 32
+  alpha: 32
+  dropout: 0.0
+  target_modules: [to_q, to_k, to_v, to_out.0]
+
+data:
+  root: /workspace/data/ffhq512
+  batch_size: 8
+  num_workers: 4
+  limit: null
+  val_size: 512
+
+train:
+  mode: lora
+  optimizer: adamw
+  accumulate_grad_batches: 1
+  grad_checkpointing: true
+  lr: 1.0e-4
+  loss_type: l2
+  lr_schedule: cosine                              # decay over the full horizon (exp2 used constant LR)
+  lr_warmup_steps: 500
+  max_steps: 26000                                 # placeholder ~3 epochs (~70k imgs / batch 8); override at launch
+  max_epochs: null
+  num_sanity_val_steps: 0
+  trigger_prompt: "a high-quality photo of a person's face"
+  mixed_precision: bf16
+  gradient_clip_val: 1.0
+  output_dir: /workspace/outputs/full_lora_l2
+  save_every_n_steps: 2000                         # periodic portable LoRA checkpoints (crash-safety over ~14 h)
+  ckpt_every_n_steps: 500                           # (unused: Lightning .ckpt disabled; see save_every_n_steps)
+  val_check_interval: 2000                          # log val/loss + val/fid every 2000 steps
+  val_seed: 0
+  sample_every_n_steps: 2000                        # ~13 progression frames over the run
+  num_samples: 4
+  sample_steps: 30
+  guidance_scale: 5.0
+  # --- in-training FID monitoring (val/fid, generated vs held-out real faces) ---
+  compute_fid: true
+  fid_num_samples: 64
+  fid_real_images: 256
+  fid_steps: 25
+
+logging:
+  wandb_project: imagegen
+  run_name: lora-r32-l2-full
+  log_every: 50

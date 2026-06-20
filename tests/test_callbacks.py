@@ -1,6 +1,8 @@
 """Tests for SampleImageCallback's step gating (offline; generate() is stubbed)."""
 
-from imagegen.callbacks import SampleImageCallback
+from pathlib import Path
+
+from imagegen.callbacks import PeriodicWeightSave, SampleImageCallback
 
 
 class _FakeTrainer:
@@ -82,3 +84,41 @@ def test_validation_epoch_end_without_split_is_noop(tmp_path):
     module = _FakeModule()
     cb.on_validation_epoch_end(_FakeTrainer(500), module)  # no captions captured
     assert module.calls == 0
+
+
+class _SaveModule:
+    def __init__(self):
+        self.saved = []
+
+    def save_weights(self, path):
+        self.saved.append(Path(path))
+
+
+def _fire_save(cb, module, step):
+    cb.on_train_batch_end(_FakeTrainer(step), module, None, None, 0)
+
+
+def test_periodic_save_on_interval_skips_step_zero(tmp_path):
+    cb = PeriodicWeightSave(str(tmp_path), every_n_steps=2000)
+    module = _SaveModule()
+    for step in (0, 1999, 2000, 4000):
+        _fire_save(cb, module, step)
+    assert module.saved == [
+        tmp_path / "checkpoints" / "step002000",
+        tmp_path / "checkpoints" / "step004000",
+    ]
+
+
+def test_periodic_save_accumulation_safe(tmp_path):
+    cb = PeriodicWeightSave(str(tmp_path), every_n_steps=100)
+    module = _SaveModule()
+    for _ in range(3):  # several micro-batches at the same global_step
+        _fire_save(cb, module, 100)
+    assert len(module.saved) == 1
+
+
+def test_periodic_save_disabled_when_non_positive(tmp_path):
+    cb = PeriodicWeightSave(str(tmp_path), every_n_steps=0)
+    module = _SaveModule()
+    _fire_save(cb, module, 2000)
+    assert module.saved == []

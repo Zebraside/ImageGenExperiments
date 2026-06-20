@@ -1,0 +1,57 @@
+# Experiment 1 -- Baseline: full UNet fine-tune of SD 2.1 base @ 512, L2 loss.
+# The reference run the other experiments are compared against. ~1500 optimizer
+# steps (short, comparable budget across all experiments). Shares trigger prompt,
+# seed, and sampling params with every other exp config so samples line up.
+#   uv run python -m imagegen.train --config configs/exp1_full_baseline.yaml
+
+seed: 42
+
+model:
+  key: sd21
+  base_model: Manojb/stable-diffusion-2-1-base
+  image_size: 512
+
+lora:                                            # ignored when train.mode == full
+  rank: 16
+  alpha: 16
+  dropout: 0.0
+  target_modules: [to_q, to_k, to_v, to_out.0]
+
+data:
+  root: /workspace/data/ffhq512
+  batch_size: 4
+  num_workers: 4
+  limit: null
+  val_size: 512
+
+train:
+  mode: full
+  optimizer: adamw_8bit
+  accumulate_grad_batches: 8                      # effective batch 32
+  grad_checkpointing: true
+  lr: 1.0e-5
+  lr_schedule: cosine
+  lr_warmup_steps: 100
+  ema: true
+  ema_decay: 0.999                               # shorter run than full_sd21 -> faster-warming EMA
+  snr_gamma: 5.0
+  loss_type: l2
+  max_steps: 1500
+  max_epochs: null
+  trigger_prompt: "a high-quality photo of a person's face"
+  cond_dropout_prob: 0.1
+  mixed_precision: bf16
+  gradient_clip_val: 1.0
+  output_dir: /workspace/outputs/exp1_full_baseline
+  ckpt_every_n_steps: 500
+  val_check_interval: 4000                        # micro-batches; /accumulate(8) = every 500 optimizer steps
+  val_seed: 0
+  sample_every_n_steps: 250                       # samples at opt steps 250,500,...,1500 (progression strip)
+  num_samples: 4
+  sample_steps: 30
+  guidance_scale: 5.0
+
+logging:
+  wandb_project: imagegen
+  run_name: full-ft-baseline-l2-1500
+  log_every: 50

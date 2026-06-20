@@ -130,3 +130,31 @@ class SampleImageCallback(L.Callback):
             captions,
             key="val_samples",
         )
+
+
+class PeriodicWeightSave(L.Callback):
+    """Periodically persist portable weights during a long run (crash-safety).
+
+    Every ``every_n_steps`` optimizer steps it calls ``pl_module.save_weights`` into
+    ``output_dir/checkpoints/step{global_step:06d}`` -- the same portable format as
+    the final save (LoRA adapter safetensors / full pipeline), so each checkpoint is
+    directly loadable by ``imagegen.evaluate`` / ``scripts.generate_report``. Final
+    weights are still written by ``train.py`` after ``fit``.
+    """
+
+    def __init__(self, output_dir: str, every_n_steps: int = 2000) -> None:
+        super().__init__()
+        self.ckpt_dir = Path(output_dir) / "checkpoints"
+        self.every_n_steps = int(every_n_steps)
+        self._last_saved_step = -1
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx) -> None:
+        step = trainer.global_step
+        if self.every_n_steps <= 0 or step == 0 or step % self.every_n_steps != 0:
+            return
+        # on_train_batch_end fires once per micro-batch; global_step is constant across
+        # an accumulation window -- guard against saving the same step more than once.
+        if step == self._last_saved_step:
+            return
+        self._last_saved_step = step
+        pl_module.save_weights(self.ckpt_dir / f"step{step:06d}")

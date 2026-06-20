@@ -1,0 +1,58 @@
+# Experiment 5 -- LPIPS auxiliary loss: the exp2 LoRA baseline plus a perceptual
+# LPIPS term on the decoded predicted-x0 vs the real image. The diffusion MSE still
+# drives training; LPIPS nudges toward perceptual (texture/structure) fidelity.
+# Runs on LoRA (not full FT) so the in-graph VAE decode + VGG perceptual net fit
+# 16 GB. The aux term is applied to 1 sample every 2 steps to bound VRAM/compute.
+#   uv run python -m imagegen.train --config configs/exp5_lora_lpips.yaml
+
+seed: 42
+
+model:
+  key: sd21
+  base_model: Manojb/stable-diffusion-2-1-base
+  image_size: 512
+
+lora:
+  rank: 32
+  alpha: 32
+  dropout: 0.0
+  target_modules: [to_q, to_k, to_v, to_out.0]
+
+data:
+  root: /workspace/data/ffhq512
+  batch_size: 4                                  # smaller than exp2 (8): the in-graph VAE decode + perceptual backward needs the VRAM headroom
+  num_workers: 4
+  limit: null
+  val_size: 512
+
+train:
+  mode: lora
+  optimizer: adamw
+  accumulate_grad_batches: 2                       # micro-batch 4 x 2 = effective batch 8 (matches the other runs)
+  grad_checkpointing: true
+  lr: 1.0e-4
+  loss_type: l2
+  max_steps: 2000                                 # fixed budget: 2000 optimizer steps for every experiment
+  max_epochs: null
+  num_sanity_val_steps: 0
+  trigger_prompt: "a high-quality photo of a person's face"
+  mixed_precision: bf16
+  gradient_clip_val: 1.0
+  output_dir: /workspace/outputs/exp5_lora_lpips
+  ckpt_every_n_steps: 500
+  val_check_interval: 800                          # micro-batches; /accumulate(2) = every 400 optimizer steps
+  val_seed: 0
+  sample_every_n_steps: 200
+  num_samples: 4
+  sample_steps: 30
+  guidance_scale: 5.0
+  # --- LPIPS auxiliary perceptual loss ---
+  aux_lpips_weight: 0.1                            # gentle: a regularizer, not dominating (0.5 over-textured the output)
+  aux_lpips_net: alex                             # lighter than vgg for an in-graph loss on 16 GB
+  aux_every_n_steps: 2
+  aux_max_samples: 1
+
+logging:
+  wandb_project: imagegen
+  run_name: lora-lpips-aux-2k
+  log_every: 50

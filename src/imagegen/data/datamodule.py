@@ -73,9 +73,9 @@ class ImageFolderDataModule(L.LightningDataModule):
             persistent_workers=self.num_workers > 0,
         )
 
-    def val_dataloader(self) -> DataLoader | None:
-        # No validation split -> no loader (the trainer is also told via
-        # limit_val_batches=0, so this is never called in that case).
+    def _eval_loader(self) -> DataLoader | None:
+        # Deterministic (shuffle=False) loader over the held-out split, shared by the
+        # validation and test stages so both reference the exact same held-out faces.
         if self.val_ds is None:
             return None
         return DataLoader(
@@ -87,3 +87,14 @@ class ImageFolderDataModule(L.LightningDataModule):
             drop_last=False,
             persistent_workers=self.num_workers > 0,
         )
+
+    def val_dataloader(self) -> DataLoader | None:
+        # No validation split -> no loader (the trainer is also told via
+        # limit_val_batches=0, so this is never called in that case).
+        return self._eval_loader()
+
+    def test_dataloader(self) -> DataLoader | None:
+        # `Trainer.test` runs over the same deterministic held-out split: it supplies
+        # the real reference faces + their captions to FidCallback's on_test_* hooks
+        # (image-quality eval, see imagegen.evaluate).
+        return self._eval_loader()

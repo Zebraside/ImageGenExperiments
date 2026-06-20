@@ -1,0 +1,64 @@
+# Experiment 3 -- Add FID score: the exp1 full-FT baseline, plus FID logged as an
+# evaluation metric (val/fid) each validation epoch. FID is a distribution metric,
+# not a differentiable loss, so it is computed in FidCallback (generated vs held-out
+# real faces), not added to the backprop objective. Training is otherwise identical
+# to exp1, so the val/fid curve is directly comparable to that run's val/loss.
+#   uv run python -m imagegen.train --config configs/exp3_full_fid.yaml
+
+seed: 42
+
+model:
+  key: sd21
+  base_model: Manojb/stable-diffusion-2-1-base
+  image_size: 512
+
+lora:
+  rank: 16
+  alpha: 16
+  dropout: 0.0
+  target_modules: [to_q, to_k, to_v, to_out.0]
+
+data:
+  root: /workspace/data/ffhq512
+  batch_size: 4
+  num_workers: 4
+  limit: null
+  val_size: 512
+
+train:
+  mode: full
+  optimizer: adamw_8bit
+  accumulate_grad_batches: 2                       # effective batch 8 (was 32); ~4x faster/step on this GPU
+  grad_checkpointing: true
+  lr: 2.0e-5                                        # slightly higher than the eff-batch-32 baseline so 150 steps shows visible adaptation
+  lr_schedule: cosine
+  lr_warmup_steps: 20
+  ema: true
+  ema_decay: 0.99                                  # short run -> faster-warming EMA
+  snr_gamma: 5.0
+  loss_type: l2
+  max_steps: 2000                                   # fixed budget: 2000 optimizer steps (cosine horizon = full run)
+  max_epochs: null
+  num_sanity_val_steps: 0
+  trigger_prompt: "a high-quality photo of a person's face"
+  cond_dropout_prob: 0.1
+  mixed_precision: bf16
+  gradient_clip_val: 1.0
+  output_dir: /workspace/outputs/exp3_full_fid
+  ckpt_every_n_steps: 500
+  val_check_interval: 800                           # micro-batches; /accumulate(2) = every 400 optimizer steps -> 5 FID passes
+  val_seed: 0
+  sample_every_n_steps: 200
+  num_samples: 4
+  sample_steps: 30
+  guidance_scale: 5.0
+  # --- FID-as-eval-metric ---
+  compute_fid: true
+  fid_num_samples: 32                             # generated images scored per validation (reduced to leave the hour for training)
+  fid_real_images: 256                            # cached real held-out faces as the reference set
+  fid_steps: 20
+
+logging:
+  wandb_project: imagegen
+  run_name: full-ft-fid-2k
+  log_every: 50

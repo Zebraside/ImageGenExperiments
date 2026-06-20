@@ -55,6 +55,31 @@ class LoRADiffusionModule(L.LightningModule):
         # Seed offset for the deterministic validation pass (see validation_step).
         self.val_seed = int(cfg.train.get("val_seed", 0))
 
+        # Base reconstruction loss on the noise/velocity target: L2 (MSE, default)
+        # or Huber/smooth-L1, which is gentler on the high-error outliers that
+        # dominate MSE. min-SNR weighting applies identically to either.
+        self.loss_type = str(cfg.train.get("loss_type", "l2"))
+        self.huber_delta = float(cfg.train.get("huber_delta", 1.0))
+
+        # Auxiliary pixel-space losses (LoRA experiments). Both reconstruct the
+        # predicted x0, VAE-decode it, and compare to the real image: LPIPS for
+        # perceptual similarity, ArcFace (facenet identity embedding) for identity
+        # preservation. Weight 0.0 disables a term (the default for exps 1-4, so
+        # they pay nothing). The decode keeps a graph, so it is restricted to the
+        # first aux_max_samples of the batch every aux_every_n_steps to bound VRAM.
+        self.aux_lpips_weight = float(cfg.train.get("aux_lpips_weight", 0.0))
+        self.aux_arcface_weight = float(cfg.train.get("aux_arcface_weight", 0.0))
+        self.aux_every_n_steps = int(cfg.train.get("aux_every_n_steps", 1))
+        self.aux_max_samples = int(cfg.train.get("aux_max_samples", 1))
+        # LPIPS backbone: 'alex' is much lighter (memory/compute) than 'vgg' for the
+        # in-graph perceptual loss on a 16 GB card; both are valid LPIPS variants.
+        self.aux_lpips_net = str(cfg.train.get("aux_lpips_net", "alex"))
+        self.aux_enabled = self.aux_lpips_weight > 0 or self.aux_arcface_weight > 0
+        # Frozen perceptual/face nets, built lazily on-device. Held in a plain dict
+        # so they are NOT registered as submodules (kept out of the state_dict /
+        # EMA, which only tracks the trainable UNet).
+        self._aux_nets: dict = {}
+
         # Weight EMA (full fine-tuning only). Built in on_fit_start once the module
         # is on-device; sampled/saved from instead of the raw weights to curb the
         # late-step fine-structure drift full fine-tuning is prone to.
@@ -149,19 +174,40 @@ class LoRADiffusionModule(L.LightningModule):
             return clamped / (snr + 1)
         return clamped / snr
 
+    def _elementwise_loss(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Unreduced reconstruction error, L2 (MSE) or Huber per ``loss_type``."""
+        if self.loss_type == "huber":
+            return F.huber_loss(pred, target, reduction="none", delta=self.huber_delta)
+        if self.loss_type == "l2":
+            return F.mse_loss(pred, target, reduction="none")
+        raise ValueError(f"Unknown train.loss_type {self.loss_type!r} (expected 'l2' or 'huber').")
+
+    def _reduce_loss(
+        self, model_pred: torch.Tensor, target: torch.Tensor, weights: torch.Tensor | None
+    ) -> torch.Tensor:
+        err = self._elementwise_loss(model_pred.float(), target.float())
+        if weights is None:
+            return err.mean()
+        # Per-sample error, weighted by min-SNR, then averaged over the batch.
+        per_sample = err.mean(dim=list(range(1, model_pred.ndim)))
+        return (per_sample * weights.to(per_sample.device)).mean()
+
     def _diffusion_loss(
         self,
         batch: dict,
         *,
         generator: torch.Generator | None = None,
         apply_dropout: bool = True,
-    ) -> torch.Tensor:
+        return_parts: bool = False,
+    ):
         """Shared training/validation objective.
 
         Passing a ``generator`` makes the noise + timestep draw (and the VAE sample)
         deterministic, so the validation pass scores the same triples every time.
         ``apply_dropout`` gates classifier-free-guidance caption dropout (training only;
-        validation measures the conditional loss).
+        validation measures the conditional loss). With ``return_parts`` the loss is
+        returned alongside the tensors the auxiliary pixel losses need (the differentiable
+        ``model_pred`` and the inputs to reconstruct the predicted x0).
         """
         pixel_values = batch["pixel_values"]
         captions = self._apply_cond_dropout(batch["caption"]) if apply_dropout else batch["caption"]
@@ -191,16 +237,96 @@ class LoRADiffusionModule(L.LightningModule):
         model_pred = self.denoiser(noisy_latents, timesteps, encoder_hidden_states).sample
 
         weights = self._loss_weights(timesteps)
-        if weights is None:
-            return F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-        # Per-sample MSE, weighted by min-SNR, then averaged over the batch.
-        per_sample = F.mse_loss(model_pred.float(), target.float(), reduction="none").mean(
-            dim=list(range(1, model_pred.ndim))
+        loss = self._reduce_loss(model_pred, target, weights)
+        if not return_parts:
+            return loss
+        parts = {
+            "model_pred": model_pred,
+            "noisy_latents": noisy_latents,
+            "timesteps": timesteps,
+            "pixel_values": pixel_values,
+        }
+        return loss, parts
+
+    # --- auxiliary pixel-space losses (LPIPS / ArcFace) -------------------
+
+    def _lpips_net(self):
+        if "lpips" not in self._aux_nets:
+            import lpips
+
+            net = lpips.LPIPS(net=self.aux_lpips_net, verbose=False).to(self.device).eval()
+            net.requires_grad_(False)
+            self._aux_nets["lpips"] = net
+        return self._aux_nets["lpips"]
+
+    def _facenet(self):
+        if "facenet" not in self._aux_nets:
+            from facenet_pytorch import InceptionResnetV1
+
+            net = InceptionResnetV1(pretrained="vggface2").to(self.device).eval()
+            net.requires_grad_(False)
+            self._aux_nets["facenet"] = net
+        return self._aux_nets["facenet"]
+
+    def _predicted_x0(
+        self, model_pred: torch.Tensor, noisy_latents: torch.Tensor, timesteps: torch.Tensor
+    ) -> torch.Tensor:
+        """Closed-form one-step x0 estimate from the model output (eps or v)."""
+        acp = self.noise_scheduler.alphas_cumprod.to(self.device)[timesteps]
+        acp = acp.view(-1, *([1] * (noisy_latents.ndim - 1)))
+        sqrt_acp = acp.sqrt()
+        sqrt_one_minus = (1 - acp).sqrt()
+        if self.bundle.prediction_type == "v_prediction":
+            return sqrt_acp * noisy_latents - sqrt_one_minus * model_pred
+        return (noisy_latents - sqrt_one_minus * model_pred) / sqrt_acp
+
+    def _decode_latents(self, latents: torch.Tensor) -> torch.Tensor:
+        """VAE-decode latents to an image in [-1, 1] (graph kept for backprop)."""
+        latents = latents / self.vae.config.scaling_factor
+        image = self.vae.decode(latents.to(self.vae.dtype)).sample
+        return image.clamp(-1, 1)
+
+    def _aux_pixel_loss(self, parts: dict) -> tuple[torch.Tensor, dict]:
+        """Weighted LPIPS + ArcFace loss on the decoded predicted x0 vs the real image."""
+        n = min(self.aux_max_samples, parts["model_pred"].shape[0])
+        pred_x0 = self._predicted_x0(
+            parts["model_pred"][:n], parts["noisy_latents"][:n], parts["timesteps"][:n]
         )
-        return (per_sample * weights.to(per_sample.device)).mean()
+        decoded = self._decode_latents(pred_x0).float()  # [-1, 1]
+        real = parts["pixel_values"][:n].float()  # already [-1, 1]
+
+        total = decoded.new_zeros(())
+        logs: dict = {}
+        if self.aux_lpips_weight > 0:
+            # lpips expects NCHW in [-1, 1] and returns a per-image distance. Compare
+            # at 256 (downsampled) to keep the perceptual-net activations within VRAM.
+            dec_lp = F.interpolate(decoded, size=256, mode="bilinear", align_corners=False)
+            real_lp = F.interpolate(real, size=256, mode="bilinear", align_corners=False)
+            lpips_val = self._lpips_net()(dec_lp, real_lp).mean()
+            total = total + self.aux_lpips_weight * lpips_val
+            logs["train/loss_lpips"] = lpips_val.detach()
+        if self.aux_arcface_weight > 0:
+            pred_r = F.interpolate(decoded, size=160, mode="bilinear", align_corners=False)
+            real_r = F.interpolate(real, size=160, mode="bilinear", align_corners=False)
+            net = self._facenet()
+            emb_pred = net(pred_r)
+            emb_real = net(real_r)  # frozen net, but keep simple (no_grad not required)
+            arc_val = (1 - F.cosine_similarity(emb_pred, emb_real, dim=1)).mean()
+            total = total + self.aux_arcface_weight * arc_val
+            logs["train/loss_arcface"] = arc_val.detach()
+        return total, logs
 
     def training_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
-        loss = self._diffusion_loss(batch)
+        run_aux = self.aux_enabled and (self.global_step % self.aux_every_n_steps == 0)
+        if run_aux:
+            base, parts = self._diffusion_loss(batch, return_parts=True)
+            aux, logs = self._aux_pixel_loss(parts)
+            loss = base + aux
+            self.log("train/loss_diffusion", base, on_step=True, on_epoch=False)
+            for key, value in logs.items():
+                self.log(key, value, on_step=True, on_epoch=False)
+        else:
+            loss = self._diffusion_loss(batch)
         self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=False)
         return loss
 
@@ -213,6 +339,16 @@ class LoRADiffusionModule(L.LightningModule):
         generator = torch.Generator(device=self.device).manual_seed(self.val_seed + batch_idx)
         loss = self._diffusion_loss(batch, generator=generator, apply_dropout=False)
         self.log("val/loss", loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        return loss
+
+    def test_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
+        # Image-quality evaluation (see imagegen.evaluate): this step drives the test
+        # loop so FidCallback's on_test_* hooks fire (real-face capture -> FID/KID). It
+        # also logs a held-out reconstruction loss, scored with the same deterministic
+        # per-batch generator as validation so test/loss is comparable across models.
+        generator = torch.Generator(device=self.device).manual_seed(self.val_seed + batch_idx)
+        loss = self._diffusion_loss(batch, generator=generator, apply_dropout=False)
+        self.log("test/loss", loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         return loss
 
     def _build_optimizer(self) -> torch.optim.Optimizer:

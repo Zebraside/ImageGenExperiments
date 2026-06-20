@@ -17,8 +17,9 @@ from lightning.pytorch.callbacks import LearningRateMonitor
 from lightning.pytorch.loggers import CSVLogger, WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
-from imagegen.callbacks import SampleImageCallback
+from imagegen.callbacks import PeriodicWeightSave, SampleImageCallback
 from imagegen.data import ImageFolderDataModule
+from imagegen.fid_callback import FidCallback
 from imagegen.lit_module import LoRADiffusionModule
 from imagegen.models import load_model
 
@@ -39,7 +40,13 @@ def parse_config() -> DictConfig:
 
 def build_logger(cfg: DictConfig):
     if cfg.logging.wandb_project:
-        return WandbLogger(project=cfg.logging.wandb_project, save_dir=cfg.train.output_dir)
+        # name= gives each experiment a meaningful W&B run name (what is being
+        # tested) instead of W&B's random auto-name; None keeps the auto-name.
+        return WandbLogger(
+            project=cfg.logging.wandb_project,
+            name=cfg.logging.get("run_name"),
+            save_dir=cfg.train.output_dir,
+        )
     return CSVLogger(save_dir=cfg.train.output_dir, name="logs")
 
 
@@ -89,12 +96,39 @@ def main() -> None:
         ),
     ]
 
+    # Periodic portable-weight checkpoints for long runs (crash-safety). Off unless
+    # train.save_every_n_steps is set, so existing configs are unaffected.
+    if cfg.train.get("save_every_n_steps"):
+        callbacks.append(
+            PeriodicWeightSave(
+                output_dir=cfg.train.output_dir,
+                every_n_steps=cfg.train.save_every_n_steps,
+            )
+        )
+
+    # FID-as-eval-metric experiment: only when explicitly requested and a held-out
+    # split exists to draw real reference images from.
+    if cfg.train.get("compute_fid", False) and val_enabled:
+        callbacks.append(
+            FidCallback(
+                trigger_prompt=cfg.train.trigger_prompt,
+                num_samples=cfg.train.get("fid_num_samples", 64),
+                real_images=cfg.train.get("fid_real_images", 256),
+                num_inference_steps=cfg.train.get("fid_steps", 25),
+                guidance_scale=cfg.train.guidance_scale,
+                seed=cfg.train.get("val_seed", 0),
+            )
+        )
+
     trainer = L.Trainer(
         accelerator="auto",
         devices="auto",
         precision=_PRECISION[cfg.train.mixed_precision],
         max_steps=cfg.train.get("max_steps") or -1,
         max_epochs=cfg.train.get("max_epochs"),
+        # Wall-clock budget ("DD:HH:MM:SS"); training stops at whichever of
+        # max_steps / max_time is reached first. None disables it.
+        max_time=cfg.train.get("max_time"),
         overfit_batches=cfg.train.get("overfit_batches", 0),
         accumulate_grad_batches=cfg.train.get("accumulate_grad_batches", 1),
         gradient_clip_val=cfg.train.gradient_clip_val,
